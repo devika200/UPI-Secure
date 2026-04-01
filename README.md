@@ -36,27 +36,46 @@ AI-powered real-time fraud detection for UPI transactions using Hidden Markov Mo
 ## 📦 Project Structure
 
 ```
-UPI/
+UPI-Secure/
 ├── Backend/
-│   ├── mainapp.py              # Main Flask application
-│   ├── model.py                # HMM model implementation
-│   ├── requirements.txt        # Python dependencies
-│   ├── hmm_fraud_model.pkl     # Trained model
-│   └── ...
+│   ├── app/
+│   │   ├── __init__.py         # Flask application factory
+│   │   ├── config.py           # Configuration management
+│   │   ├── database.py         # MongoDB connection manager
+│   │   ├── models.py           # ML model loader (ModelManager)
+│   │   ├── utils.py            # Feature calculation utilities
+│   │   ├── routes/
+│   │   │   ├── auth.py         # Authentication endpoints
+│   │   │   ├── fraud.py        # Fraud detection endpoints
+│   │   │   └── admin.py        # Admin endpoints
+│   │   └── services/
+│   │       ├── fraud_detection.py  # FraudDetectionService
+│   │       └── risk_analysis.py    # RiskAnalysisService
+│   ├── models/
+│   │   ├── arlg_hmm_model.pkl  # Trained AR-HMM model
+│   │   ├── crf_model.pkl       # Trained CRF model
+│   │   ├── scaler.pkl          # Feature scaler
+│   │   └── label_encoder.pkl   # Label encoder
+│   ├── mainapp.py              # Entry point (imports from wsgi)
+│   ├── wsgi.py                 # WSGI application
+│   ├── model.py                # AutoRegressiveHMM class
+│   └── requirements.txt        # Python dependencies
 ├── frontend/
 │   ├── src/
-│   │   ├── pages/              # React pages
-│   │   ├── components/         # React components
-│   │   └── ...
+│   │   ├── pages/              # React pages (Home, Login, Register, TransactionForm, History, About)
+│   │   ├── components/         # React components (Navbar)
+│   │   ├── App.jsx             # Main app component
+│   │   └── config.js           # API configuration
 │   ├── package.json
-│   └── ...
-└── DEPLOYMENT_GUIDE.md         # Deployment instructions
+│   └── vite.config.js
+├── models/                     # Additional model copies
+└── UPI_SECURE.ipynb            # Model training notebook
 ```
 
 ## 🚀 Quick Start
 
 ### Prerequisites
-- Python 3.12+
+- Python 3.12+ (tested with 3.14)
 - Node.js 18+
 - MongoDB (local or Atlas)
 
@@ -78,7 +97,7 @@ npm install
 npm run dev
 ```
 
-Frontend runs on: `http://localhost:3000`
+Frontend runs on: `http://localhost:5173`
 
 ## 🌐 Deployment
 
@@ -115,16 +134,16 @@ All free tier available!
 **Algorithms**: Ensemble of HMM (Hidden Markov Model) and CRF (Conditional Random Field)
 
 **Features Used** (10 total):
-- Transaction Amount (INR)
-- Transaction Amount Difference from average
-- Transaction Frequency Score
-- Time Anomaly Score
-- Recipient Total Transactions
-- Recipient Average Transaction Amount
-- Risk Score
-- Hour of transaction
-- Day of week
-- Location Cluster
+1. **Transaction Amount (INR)** - Current transaction amount
+2. **Transaction_Amount_Diff** - Absolute difference from user's last transaction
+3. **Transaction_Frequency_Score** - Recent transactions in 30 days / 10
+4. **Time_Anomaly_Score** - Unusual hour detection scaled by amount ratio
+5. **Recipient_Total_Transactions** - Count of transactions to this recipient
+6. **Recipient_Avg_Transaction_Amount** - Average amount to this recipient
+7. **Risk_Score** - (Frequency_Score + Time_Anomaly_Score) / 2
+8. **hour** - Hour of day (0-23)
+9. **day_of_week** - Day of week (0-6, Monday=0)
+10. **Location_Cluster** - Placeholder (currently 0.0)
 
 **Classification Labels**:
 - 0: Normal (Low fraud risk)
@@ -132,10 +151,23 @@ All free tier available!
 - 2: Fraud (High fraud risk)
 
 **Ensemble Scoring**:
-- HMM prediction: Uses lagged features from last 2 transactions (requires ≥4 rows)
-- CRF prediction: Uses current scaled features
-- Final score: Average of both models (0.0-1.0)
-- Confidence: High (≥0.67), Medium (0.33-0.67), Low (<0.33)
+- **HMM prediction**: Uses AR-HMM with 3 lags (requires ≥3 historical transactions)
+  - Retrieves last 2 transactions from MongoDB
+  - Creates lagged feature matrix: [t-2, t-1, t] features
+  - Applies scaler to all rows
+  - Creates 30-feature lagged observation: np.hstack([X[-1], X[-2], X[-3]])
+  - Predicts state (0, 1, or 2)
+- **CRF prediction**: Uses current transaction's 10 scaled features
+  - Converts to dictionary format with exact attribute names
+  - Predicts label (0, 1, or 2)
+- **Final score**: Average of HMM and CRF probabilities (0.0-1.0)
+  - HMM probability = state / 2.0
+  - CRF probability = label / 2.0
+  - Ensemble score = (HMM_prob + CRF_prob) / 2
+- **Classification**:
+  - Score ≥0.67 → Label 2 (Fraud), High confidence
+  - Score 0.33-0.67 → Label 1 (Suspicious), Medium confidence
+  - Score <0.33 → Label 0 (Normal), Low confidence
 
 ## 🎯 API Endpoints
 
@@ -148,32 +180,47 @@ All free tier available!
 - `GET /api/history` - Get user's transaction history (requires JWT)
 
 ### Admin
-- `GET /health` - Health check
-- `GET /api/admin/stats` - Database statistics
+- `GET /health` - Health check (model status, DB connection)
+- `GET /api/admin/stats` - Database statistics (users, transactions, fraud rate)
+- `GET /api/admin/users` - Get all users (without passwords)
+- `GET /api/admin/transactions` - Get all transactions with filters
+
+### Testing
+- `POST /api/fraud/predict` - Public fraud prediction endpoint (no auth required)
 
 ## 🧪 Testing
 
+**Test the API** using the public endpoint:
 ```bash
-# Backend tests
-cd Backend
-python test_login.py
+curl -X POST http://localhost:5000/api/fraud/predict \
+  -H "Content-Type: application/json" \
+  -d '{
+    "username": "test_user",
+    "recipient_id": "merchant@paytm",
+    "transaction_amount": 5000,
+    "transaction_time": "2024-01-15T14:30:00"
+  }'
+```
 
-# Check MongoDB data
-python check_mongodb.py
+**Check health status**:
+```bash
+curl http://localhost:5000/health
 ```
 
 ## 📝 Environment Variables
 
-### Backend
-```
+### Backend (.env)
+```bash
 MONGODB_URI=mongodb://localhost:27017/
-JWT_SECRET_KEY=your-secret-key
+JWT_SECRET_KEY=your-secret-key-change-in-production
+SECRET_KEY=dev-secret-key-change-in-production
+FLASK_ENV=development
 PORT=5000
 ```
 
-### Frontend
-```
-VITE_API_URL=http://localhost:5000
+### Frontend (src/config.js)
+```javascript
+export const API_URL = 'http://localhost:5000';
 ```
 
 ## 🤝 Contributing
